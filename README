@@ -1,0 +1,19 @@
+A command line interface for managing MPI cluters on Amazon EC2. Clusters are
+represented as EC2 reservations. For now no public AMI exists to use this
+script, but eventually I'll probably release it.
+
+Required Python packages
+boto - Amazon API
+M2Crypto - generating RSA keys
+paramiko - SSH module
+
+Required Amazin Services
+EC2 - for the clusters themselves
+SimpleDB - maintaining meta information about clusters
+S3 - storing keys for MPI networking
+
+Also requires a file named "config.py" that has the following variables (all
+available from http://aws.amazon.com under Your Account->Access Identifiers)
+ACCESS_KEY_ID
+SECRET_ACCESS_KEY
+USER_ID
