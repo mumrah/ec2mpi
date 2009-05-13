@@ -36,7 +36,7 @@ def choose(options,message,return_type=OPTIONS_VALUE):
     while 1:
         choice = raw_input("%s (q to Quit): "%message)
         if choice == "q":
-            sys.exit()
+            exit()
         elif int(choice) < count:
             break
         else:
@@ -46,7 +46,11 @@ def choose(options,message,return_type=OPTIONS_VALUE):
     else:
         return int(choice)-1
 def genKey():
-    "Returns a tuple of public, private keys as strings"
+    """
+    Returns a tuple of public key, private key, meta data. 
+    The keys are returned as strings, and the meta data as a dict. The meta data
+    is used to store info we display to the user when choosing a key.
+    """
     pub = NamedTemporaryFile('rw') 
     pri = NamedTemporaryFile('rw')
     key = M2Crypto.RSA.gen_key(1024,17)
@@ -143,6 +147,18 @@ def _action_create():
         if image.architecture == arch:
             the_image = image 
     num = choose([2,4,8,16,32,64],"Number of instances") 
+    available_keys = _get_keys()
+    if len(available_keys) == 0:
+        print "You don't have any keys, creating one now"
+        _action_genkey()
+        mpi_key = _get_keys()[0]
+    else:
+        available_keys += ["Create a new key"]
+        mpi_key = choose(available_keys,"Choose a key to use for MPI communication")
+    if mpi_key == "Create a new key":
+        mpi_key = _action_genkey()[1]
+    print mpi_key
+    return
     reservation = ec2.run_instances(image_id=the_image.id,min_count=num,max_count=num,key_name="school",instance_type="m1.small",placement="us-east-1a")
     for instance in reservation.instances:
         if instance.update() == u'running':
@@ -207,6 +223,8 @@ def _action_genkey():
     """
     Generate a keypair for the MPI cluster to communicate with. Upload the key
     to S3 and set the permissions
+
+    Returns a tuple of the exit code and the generated key's name
     """
     pub,pri = genKey()
     s3 = S3Connection(ACCESS_KEY_ID,SECRET_ACCESS_KEY)
@@ -217,7 +235,7 @@ def _action_genkey():
     keyname = raw_input("Choose a name for the key (q to Quit): ")
     while 1:
         if keyname == "q":
-            return
+            exit()
         elif keyname == "":
             keyname = raw_input("Choose a name for the key (q to Quit): ")
         elif bucket.get_key("id-%s"%keyname):
@@ -225,10 +243,12 @@ def _action_genkey():
             keyname = raw_input("Choose a name for the key (q to Quit): ")
         else:
             break
+    keyname = keyname.replace(" ","-")
     pub_key = bucket.new_key("id-%s.pub"%keyname)
     pub_key.set_contents_from_string(s=pub,policy='private')
     pri_key = bucket.new_key("id-%s"%keyname)
     pri_key.set_contents_from_string(s=pri,policy='private')
+    return 1,keyname
      
 def _action_help():
     print """Usage: python main.py [action]
@@ -242,21 +262,29 @@ Actions:
     list - list current clusters
     """
 
-def _action_keys():
+def _get_keys():
+    "Get all of the available private keys from S3 for use with MPI"
     s3 = S3Connection(ACCESS_KEY_ID,SECRET_ACCESS_KEY)
     bucket = s3.lookup(S3_BUCKET)
     if not bucket:
-        print "You have not created any keys yet"
-        return
+        return None
     keys = bucket.list('id-')
     available_keys = []
     for key in keys:
-        m = re.match(r'id\-(\w+)\.pub',key.name)
+        m = re.match(r'id\-([\w\W\d\D]+)\.pub',key.name)
         if m:
             available_keys += [m.group(1)]
+    return available_keys
+
+def _action_keys():
+    available_keys = _get_keys()
+    if len(available_keys) == 0:
+        print "No keys available"
+        return 1
     print "Keys available for use:"
     for key in available_keys:
         print " - %s"%key
+    return 1
 
 def _action_list():
     sdb = SDB("clusters")
@@ -278,7 +306,7 @@ def _action_list():
 def main():
     if len(sys.argv) < 2:
         print "Missing argument, try 'help' for more info"
-        sys.exit(1)
+        exit()
     else:
         action = sys.argv[1]
     available_actions = [x.__name__ for x in listfunc() if x.__name__.find("_action_") == 0]
