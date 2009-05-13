@@ -157,9 +157,24 @@ def _action_create():
         mpi_key = choose(available_keys,"Choose a key to use for MPI communication")
     if mpi_key == "Create a new key":
         mpi_key = _action_genkey()[1]
-    print mpi_key
+    startup_script = """
+#!/bin/bash
+PRIVATE_KEY="id-%(file)s"
+cd /tmp
+wget http://ec2mpi.s3.amazonaws.com/s3download.py
+python s3download.py %(access_key)s %(secret_key)s %(bucket)s $PRIVATE_KEY
+mv $PRIVATE_KEY /root/.ssh/id_rsa
+chmod 400 /root/.ssh/id_rsa
+ssh-keygen -y -f /root/.ssh/id_rsa > /root/.ssh/id_rsa.pub
+cat /root/.ssh/id_rsa.pub >> /root/.ssh/authorized_keys
+chmod -R 400 /root/.ssh
+    """ % {'access_key':ACCESS_KEY_ID,
+            'secret_key':SECRET_ACCESS_KEY,
+            'file':mpi_key,
+            'bucket':S3_BUCKET}
+    print startup_script
     return
-    reservation = ec2.run_instances(image_id=the_image.id,min_count=num,max_count=num,key_name="school",instance_type="m1.small",placement="us-east-1a")
+    reservation = ec2.run_instances(image_id=the_image.id,min_count=num,max_count=num,key_name="school",instance_type="m1.small",placement="us-east-1a",user_data=startup_script)
     for instance in reservation.instances:
         if instance.update() == u'running':
             print "Instance ",instance," is running"
