@@ -9,6 +9,7 @@ from tempfile import NamedTemporaryFile
 import paramiko
 import inspect
 import re
+import urllib2,urllib
 from config import *
 
 S3_BUCKET               = md5.new(USER_ID+"mpi-keys").hexdigest()
@@ -63,12 +64,37 @@ def genKey():
     pub.close()
     pri.close()
     return pubstr,pristr
+def genTempURL(url):
+    data = urllib.urlencode({'url':url,'output':"text"})
+    req = urllib2.Request("http://turl.mumrah.net/create",data)
+    try:
+        resp = urllib2.urlopen(req)
+        out = resp.read()
+        return out
+    except Exception,err:
+        print "Could not generate temporary URL, please try again"
+        print err
+        sys.exit()
 def listfunc():
     me = __import__(inspect.getmodulename(__file__))
     for name in dir(me):
         obj = getattr(me,name)
         if inspect.isfunction(obj):
             yield obj
+def sendFile(host,filestring,filename):
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(
+            hostname=host,
+            username='root',
+            key_filename=AWS_KEYPAIR_PATH,
+            timeout=10)
+    sftp = client.open_sftp()
+    fp = sftp.open(filename,'w')
+    fp.write(filestring)
+    fp.close()
+    sftp.close()
+    client.close()
 
 # Amazon Helper Functions
 def SDB(domain_name):
@@ -157,24 +183,29 @@ def _action_create():
         mpi_key = choose(available_keys,"Choose a key to use for MPI communication")
     if mpi_key == "Create a new key":
         mpi_key = _action_genkey()[1]
+    # Generate temporary URLs to keys on S3
+    s3 = S3Connection(ACCESS_KEY_ID,SECRET_ACCESS_KEY)
+    bucket = s3.lookup(S3_BUCKET)
+    pri_key = bucket.get_key("id-%s"%mpi_key)
+    pub_key = bucket.get_key("id-%s.pub"%mpi_key)
+    pri_key_url = pri_key.generate_url(300)
+    pub_key_url = pub_key.generate_url(300)
     startup_script = """
 #!/bin/bash
-PRIVATE_KEY="id-%(file)s"
 cd /tmp
-wget http://ec2mpi.s3.amazonaws.com/s3download.py
-python s3download.py %(access_key)s %(secret_key)s %(bucket)s $PRIVATE_KEY
-mv $PRIVATE_KEY /root/.ssh/id_rsa
+curl '%(pri_key_url)s' > id_rsa
+curl '%(pub_key_url)s' > id_rsa.pub
+mv id_rsa /root/.ssh/id_rsa
 chmod 400 /root/.ssh/id_rsa
 ssh-keygen -y -f /root/.ssh/id_rsa > /root/.ssh/id_rsa.pub
 cat /root/.ssh/id_rsa.pub >> /root/.ssh/authorized_keys
 chmod -R 400 /root/.ssh
     """ % {'access_key':ACCESS_KEY_ID,
             'secret_key':SECRET_ACCESS_KEY,
-            'file':mpi_key,
-            'bucket':S3_BUCKET}
-    print startup_script
-    return
-    reservation = ec2.run_instances(image_id=the_image.id,min_count=num,max_count=num,key_name="school",instance_type="m1.small",placement="us-east-1a",user_data=startup_script)
+            'bucket':S3_BUCKET,
+            'pri_key_url':pri_key_url,
+            'pub_key_url':pub_key_url}
+    reservation = ec2.run_instances(image_id=the_image.id,min_count=num,max_count=num,key_name=AWS_KEYPAIR_NAME,instance_type="m1.small",placement="us-east-1a",user_data=startup_script)
     for instance in reservation.instances:
         if instance.update() == u'running':
             print "Instance ",instance," is running"
@@ -188,20 +219,18 @@ chmod -R 400 /root/.ssh
                 else:
                     continue
     saveInstanceMetaData(reservation) # Update SimpleDB entries
-    # Log into each instance and setup keys, etc
-    pub,pri = genKey() 
 
     # Build machinefile and upload to master node
     master_node = None
     worker_nodes = []
     machinestring = ""
-    for instance in reservation:
-        if instance.ami_launch_index == 0:
+    for instance in reservation.instances:
+        if instance.ami_launch_index == u'0':
             master_node = instance
         else:
             worker_nodes += [instance]
         machinestring += instance.private_dns_name+"\n"
-      
+    sendFile(master_node.public_dns_name,machinestring,"/root/machines")
         
     print "All Instances are available"
 
