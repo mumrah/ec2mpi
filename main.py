@@ -146,9 +146,13 @@ def getActiveReservations():
     reservations = ec2.get_all_instances()
     r_ids = []
     for reservation in reservations:
+        if reservation.instances[0].update() == u'terminated':
+            continue
         r_ids += [reservation.id]
     # Get items from SDB for each reservation (this will exclude terminated instances
     # if the reservation still exists)
+    if len(r_ids) == 0:
+        return [] 
     query_predicates = ["['reservation' = '%s']"%r_id for r_id in r_ids]
     query = " union ".join(query_predicates)
     items = sdb.query(query)
@@ -190,8 +194,7 @@ def _action_create():
     pub_key = bucket.get_key("id-%s.pub"%mpi_key)
     pri_key_url = pri_key.generate_url(300)
     pub_key_url = pub_key.generate_url(300)
-    startup_script = """
-#!/bin/bash
+    startup_script = """#!/bin/bash
 cd /tmp
 curl '%(pri_key_url)s' > id_rsa
 curl '%(pub_key_url)s' > id_rsa.pub
@@ -241,9 +244,9 @@ def _action_debugdb():
 #        sdb.delete_item(item)
         print item
 
-def _action_destory():
+def _action_destroy():
     """
-    Present a list of active reservations and prompt user which to destory.
+    Present a list of active reservations and prompt user which to destroy.
     Need to get all active reservations based on SDB records
     """
     sdb = SDB("clusters")
@@ -299,7 +302,7 @@ def _action_help():
 Actions:
     create - create cluster
     debugdb - show current records in SimpleDB domain for this utility
-    destory - destroy cluster
+    destroy - destroy cluster
     genkey - generate a keypair for MPI
     help - display this help
     keys - list all keys available for MPI
