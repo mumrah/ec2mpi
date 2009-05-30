@@ -12,6 +12,9 @@ import re
 import urllib2,urllib
 from config import *
 
+import socket
+socket.setdefaulttimeout(60)
+
 S3_BUCKET               = md5.new(USER_ID+"mpi-keys").hexdigest()
 OPTIONS_VALUE           = 0
 OPTIONS_IDX             = 1
@@ -84,17 +87,39 @@ def listfunc():
 def sendFile(host,filestring,filename):
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(
+    try:
+        client.connect(
             hostname=host,
             username='root',
             key_filename=AWS_KEYPAIR_PATH,
             timeout=10)
+    except Exception, err:
+        print err
+        raise paramiko.SSHException("SSH Error, probably timeout")
     sftp = client.open_sftp()
     fp = sftp.open(filename,'w')
     fp.write(filestring)
     fp.close()
     sftp.close()
     client.close()
+def sendCommand(host,string):
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        client.connect(
+            hostname=host,
+            username='root',
+            key_filename=AWS_KEYPAIR_PATH,
+            timeout=10)
+    except Exception, err:
+        print err
+        raise paramiko.SSHException("SSH Error, probably timeout")
+    stdin,stdout,stderr = client.exec_command(string)
+    stdout = stdout.read()
+    stderr = stderr.read()
+    client.close()
+    return stdout,stderr
+
 
 # Amazon Helper Functions
 def SDB(domain_name):
@@ -196,18 +221,27 @@ def _action_create():
     pub_key_url = pub_key.generate_url(300)
     startup_script = """#!/bin/bash
 cd /tmp
+# Download SSH keys
 curl '%(pri_key_url)s' > id_rsa
-curl '%(pub_key_url)s' > id_rsa.pub
+# Install SSH keys
 mv id_rsa /root/.ssh/id_rsa
 chmod 400 /root/.ssh/id_rsa
 ssh-keygen -y -f /root/.ssh/id_rsa > /root/.ssh/id_rsa.pub
 cat /root/.ssh/id_rsa.pub >> /root/.ssh/authorized_keys
 chmod -R 400 /root/.ssh
+# Mount S3 Volume
+apt-get -y install fuse-utils
+modprobe fuse
+echo '%(access_key)s:%(secret_key)s' > /etc/passwd-s3fs
+chmod 400 /etc/passwd-s3fs
+echo 's3fs#1892529bd3211f42c872e87e63e3ce5a /vol fuse allow_other 0 0' >> /etc/fstab
+mount /vol
     """ % {'access_key':ACCESS_KEY_ID,
             'secret_key':SECRET_ACCESS_KEY,
             'bucket':S3_BUCKET,
             'pri_key_url':pri_key_url,
             'pub_key_url':pub_key_url}
+
     reservation = ec2.run_instances(image_id=the_image.id,min_count=num,max_count=num,key_name=AWS_KEYPAIR_NAME,instance_type="m1.small",placement="us-east-1a",user_data=startup_script)
     for instance in reservation.instances:
         if instance.update() == u'running':
@@ -233,9 +267,33 @@ chmod -R 400 /root/.ssh
         else:
             worker_nodes += [instance]
         machinestring += instance.private_dns_name+"\n"
-    sendFile(master_node.public_dns_name,machinestring,"/root/machines")
-        
-    print "All Instances are available"
+    # Send machinefile and setup known_hosts for seemless SSH
+    max_attempt = 10
+    attempt = 1
+    while 1:
+        try:
+            print "Sending machinefile and setting up SSH (attempt %d of %d)" % (attempt,max_attempt) 
+            sendFile(master_node.public_dns_name,machinestring,"/root/machines")
+            stdout,stderr = sendCommand(master_node.public_dns_name,"""rm -f /root/.ssh/known_hosts ; cat /root/machines | awk '{ system("ssh-keyscan " $0 " >> /root/.ssh/known_hosts") }'""")   
+            known_hosts = len(stderr.split("\n"))
+            if known_hosts == num+1:
+                break
+            else:
+                print "stdout: ",stdout
+                print "stderr: ",stderr
+                print len(stderr.split("\n"))
+                raise paramiko.SSHException("Looks like networking is not yet available")
+        except paramiko.SSHException,err :
+            if attempt == max_attempt:
+                print "You fail too hard, sir."
+                sys.exit()
+            print "SSH Error, trying again: ",err
+            time.sleep(5)
+            attempt += 1
+            continue 
+
+    print "All Instances are available. Master node can be accessed at:"
+    print master_node.public_dns_name
 
 def _action_debugdb():
     sdb = SDB("clusters")
