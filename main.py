@@ -196,12 +196,23 @@ def _action_create():
     sdb = SDB("clusters")
     ec2 = EC2Connection(ACCESS_KEY_ID,SECRET_ACCESS_KEY)
     images = ec2.get_all_images(owners=USER_ID)
+    # Choose the architecture
     arch = choose(["i386","x86_64"],"Choose architecture")
     the_image = None
     for image in images:
         if image.architecture == arch:
             the_image = image 
-    num = choose([2,4,8,16,32,64],"Number of instances") 
+    # Choose architecture
+    if arch == "i386":
+        instance_type = choose(["m1.small","c1.medium"],"Choose instance size")
+    elif arch == "x86_64":
+        instance_type = choose(["m1.large","m1.xlarge","c1.xlarge"],"Choose instance size")
+    else:
+        print "Sorry, bad arch"
+        sys.exit()
+    # Choose the number of instances
+    num = choose([2,4,8,16,32,64,128,256],"Number of instances") 
+    # Choose the SSH key to use
     available_keys = _get_keys()
     if len(available_keys) == 0:
         print "You don't have any keys, creating one now"
@@ -242,7 +253,7 @@ mount /vol
             'pri_key_url':pri_key_url,
             'pub_key_url':pub_key_url}
 
-    reservation = ec2.run_instances(image_id=the_image.id,min_count=num,max_count=num,key_name=AWS_KEYPAIR_NAME,instance_type="m1.small",placement="us-east-1a",user_data=startup_script)
+    reservation = ec2.run_instances(image_id=the_image.id,min_count=num,max_count=num,key_name=AWS_KEYPAIR_NAME,instance_type=instance_type,placement="us-east-1a",user_data=startup_script)
     for instance in reservation.instances:
         if instance.update() == u'running':
             print "Instance ",instance," is running"
