@@ -245,7 +245,7 @@ apt-get -y install fuse-utils
 modprobe fuse
 echo '%(access_key)s:%(secret_key)s' > /etc/passwd-s3fs
 chmod 400 /etc/passwd-s3fs
-echo 's3fs#1892529bd3211f42c872e87e63e3ce5a /vol fuse allow_other 0 0' >> /etc/fstab
+echo 's3fs#%(mpi_bucket)s /vol fuse allow_other 0 0' >> /etc/fstab
 mount /vol
     """ % {'access_key':ACCESS_KEY_ID,
             'secret_key':SECRET_ACCESS_KEY,
